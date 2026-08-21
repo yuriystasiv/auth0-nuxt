@@ -5,6 +5,8 @@ import {
   addRouteMiddleware,
   addImportsDir,
   addServerImportsDir,
+  addPlugin,
+  extendRouteRules,
   resolvePath,
 } from '@nuxt/kit';
 import type { Nuxt } from '@nuxt/schema';
@@ -24,6 +26,8 @@ vi.mock('@nuxt/kit', async () => {
     addRouteMiddleware: vi.fn(),
     addImportsDir: vi.fn(),
     addServerImportsDir: vi.fn(),
+    addPlugin: vi.fn(),
+    extendRouteRules: vi.fn(),
     resolvePath: vi.fn((path) => Promise.resolve(`resolved/user/${path}`)),
   };
 });
@@ -59,6 +63,7 @@ describe('Auth0 Nuxt Module', () => {
       path: 'resolved/runtime/middleware/auth.server',
       global: true,
     });
+    expect(addPlugin).toHaveBeenCalledWith('resolved/runtime/plugins/auth.client');
     expect(addImportsDir).toHaveBeenCalledWith('resolved/runtime/composables');
     expect(addServerImportsDir).toHaveBeenCalledWith('resolved/runtime/server/composables');
   });
@@ -70,11 +75,38 @@ describe('Auth0 Nuxt Module', () => {
     expect(addServerHandler).not.toHaveBeenCalled();
   });
 
+  it('should opt the profile route out of Nitro caching even when mountRoutes is false', async () => {
+    // An app that mounts the profile handler itself still needs this rule: Nitro decides
+    // whether to cache from the route a handler is registered at, so without it a broad
+    // `'/**': { swr: 60 }` would cache one user's claims and serve them to the next.
+    // @ts-expect-error: module is a function
+    await auth0Module.setup({ mountRoutes: false }, mockNuxt);
+
+    expect(extendRouteRules).toHaveBeenCalledWith('/auth/profile', { cache: false }, { override: true });
+  });
+
+  it('should opt the profile route out of Nitro caching', async () => {
+    // Nitro keys cached responses by path without the session cookie and overwrites the
+    // handler's own `Cache-Control`, so a broad rule like `'/**': { swr: 60 }` would let it
+    // serve one user's claims to another. `cache: false` on the exact path prevents that.
+    // @ts-expect-error: module is a function
+    await auth0Module.setup({}, mockNuxt);
+
+    expect(extendRouteRules).toHaveBeenCalledWith('/auth/profile', { cache: false }, { override: true });
+  });
+
+  it('should opt a custom profile route out of Nitro caching', async () => {
+    // @ts-expect-error: module is a function
+    await auth0Module.setup({ routes: { profile: '/custom-profile' } }, mockNuxt);
+
+    expect(extendRouteRules).toHaveBeenCalledWith('/custom-profile', { cache: false }, { override: true });
+  });
+
   it('should mount default routes when mountRoutes is undefined', async () => {
     // @ts-expect-error: module is a function
     await auth0Module.setup({}, mockNuxt);
 
-    expect(addServerHandler).toHaveBeenCalledTimes(4);
+    expect(addServerHandler).toHaveBeenCalledTimes(5);
     expect(addServerHandler).toHaveBeenCalledWith({
       handler: 'resolved/runtime/server/api/auth/login.get',
       route: '/auth/login',
@@ -95,6 +127,11 @@ describe('Auth0 Nuxt Module', () => {
       route: '/auth/backchannel-logout',
       method: 'post',
     });
+    expect(addServerHandler).toHaveBeenCalledWith({
+      handler: 'resolved/runtime/server/api/auth/profile.get',
+      route: '/auth/profile',
+      method: 'get',
+    });
   });
 
   it('should mount custom routes when provided and mountRoutes is true', async () => {
@@ -108,11 +145,23 @@ describe('Auth0 Nuxt Module', () => {
     // @ts-expect-error: module is a function
     await auth0Module.setup({ mountRoutes: true, routes: customRoutes }, mockNuxt);
 
-    expect(addServerHandler).toHaveBeenCalledTimes(4);
+    expect(addServerHandler).toHaveBeenCalledTimes(5);
     expect(addServerHandler).toHaveBeenCalledWith(expect.objectContaining({ route: '/custom-login' }));
     expect(addServerHandler).toHaveBeenCalledWith(expect.objectContaining({ route: '/custom-logout' }));
     expect(addServerHandler).toHaveBeenCalledWith(expect.objectContaining({ route: '/custom-callback' }));
     expect(addServerHandler).toHaveBeenCalledWith(expect.objectContaining({ route: '/custom-backchannel-logout' }));
+    expect(addServerHandler).toHaveBeenCalledWith(expect.objectContaining({ route: '/auth/profile' }));
+  });
+
+  it('should mount a custom profile route when provided', async () => {
+    // @ts-expect-error: module is a function
+    await auth0Module.setup({ routes: { profile: '/custom-profile' } }, mockNuxt);
+
+    expect(addServerHandler).toHaveBeenCalledWith({
+      handler: 'resolved/runtime/server/api/auth/profile.get',
+      route: '/custom-profile',
+      method: 'get',
+    });
   });
 
   it('should expose routes in public runtime config', async () => {
@@ -124,6 +173,7 @@ describe('Auth0 Nuxt Module', () => {
       callback: '/auth/callback',
       logout: '/auth/logout',
       backchannelLogout: '/auth/backchannel-logout',
+      profile: '/auth/profile',
     };
 
     // @ts-expect-error: module is a function
@@ -131,7 +181,15 @@ describe('Auth0 Nuxt Module', () => {
 
     expect(mockNuxt.options.runtimeConfig.public.auth0).toEqual({
       routes: expectedRoutes,
+      ssrUser: true,
     });
+  });
+
+  it('exposes ssrUser: false in public runtime config when opted out globally', async () => {
+    // @ts-expect-error: module is a function
+    await auth0Module.setup({ ssrUser: false }, mockNuxt);
+
+    expect((mockNuxt.options.runtimeConfig.public.auth0 as { ssrUser: boolean }).ssrUser).toBe(false);
   });
 
   it('should set up default session store alias when no path is provided', async () => {
