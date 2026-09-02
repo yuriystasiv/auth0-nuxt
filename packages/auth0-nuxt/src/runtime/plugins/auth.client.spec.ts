@@ -65,17 +65,33 @@ describe('auth.client plugin', () => {
     expect(user.value).toEqual({ sub: 'hydrated' });
   });
 
-  it('leaves the user unset when the endpoint reports nobody is signed in', async () => {
+  // The handler returns `null` for an anonymous caller, which must not become `null` on the
+  // ref — `useUser()` is typed as `UserClaims | undefined`. An empty body means the same.
+  it.each([null, undefined])('leaves the user unset when the endpoint answers %s', async (signedOut) => {
     const user = { value: undefined as unknown };
     useUserMock.mockReturnValue(user);
-    // The handler returns `null` for an anonymous caller, which must not become `null` on the
-    // ref — `useUser()` is typed as `UserClaims | undefined`.
-    fetchMock.mockResolvedValue(null);
+    fetchMock.mockResolvedValue(signedOut);
     const nuxtApp = makeNuxtApp();
     await (plugin as unknown as (app: unknown) => Promise<void>)(nuxtApp);
     await nuxtApp.runHook('app:suspense:resolve');
     expect(user.value).toBeUndefined();
   });
+
+  // With `mountRoutes: false` and a catch-all page, Nuxt answers `/auth/profile` with 200
+  // text/html and ofetch resolves with the HTML as a string. Nothing but an object carrying a
+  // `sub` may reach the ref.
+  it.each(['<!DOCTYPE html>', 42, true, ['sub'], {}, { sub: 1 }])(
+    'stays anonymous when the endpoint answers %j instead of claims',
+    async (notAUser) => {
+      const user = { value: undefined as unknown };
+      useUserMock.mockReturnValue(user);
+      fetchMock.mockResolvedValue(notAUser);
+      const nuxtApp = makeNuxtApp();
+      await (plugin as unknown as (app: unknown) => Promise<void>)(nuxtApp);
+      await nuxtApp.runHook('app:suspense:resolve');
+      expect(user.value).toBeUndefined();
+    }
+  );
 
   it('stays anonymous when the fetch fails', async () => {
     const user = { value: undefined as unknown };

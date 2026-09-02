@@ -3,6 +3,25 @@ import type { UserClaims } from '@auth0/auth0-server-js';
 import { useUser } from '../composables/use-user';
 import type { RouteConfig } from '../../types';
 
+/** `sub` is the one claim every user has, so its presence is what separates claims from noise. */
+const isClaims = (value: unknown): value is UserClaims =>
+  typeof value === 'object' && value !== null && 'sub' in value && typeof value.sub === 'string';
+
+/**
+ * Dev-only explanation for why `useUser()` stayed anonymous. The likely cause is the same in
+ * every case: a `mountRoutes: false` app that never mounted the profile handler, which leaves
+ * every opted-out route anonymous with no other signal.
+ */
+const warnAnonymous = (profile: string, reason: string, detail: unknown) => {
+  if (import.meta.dev) {
+    console.warn(
+      `[auth0] ${reason} \`${profile}\`, so \`useUser()\` stays anonymous. ` +
+        'If you set `mountRoutes: false`, mount the profile handler yourself.',
+      detail
+    );
+  }
+};
+
 /**
  * Client-side hydration of the authenticated user.
  *
@@ -25,22 +44,23 @@ export default defineNuxtPlugin(async (nuxtApp) => {
 
   nuxtApp.hook('app:suspense:resolve', async () => {
     try {
-      const fetched = await $fetch<UserClaims | null>(routes.profile, {
+      const fetched = await $fetch<unknown>(routes.profile, {
         headers: { accept: 'application/json' },
         retry: false,
       });
-      user.value = fetched ?? undefined;
-    } catch (error) {
-      // Stay anonymous on failure; auth-dependent UI simply renders logged-out. Warn in dev,
-      // because the most likely cause is a `mountRoutes: false` app that never mounted the
-      // profile handler — which leaves every opted-out route anonymous with no other signal.
-      if (import.meta.dev) {
-        console.warn(
-          `[auth0] Could not fetch \`${routes.profile}\`, so \`useUser()\` stays anonymous. ` +
-            'If you set `mountRoutes: false`, mount the profile handler yourself.',
-          error
-        );
+      // Only claims may reach the ref. With `mountRoutes: false` and a catch-all page, Nuxt
+      // answers this fetch with the page itself as 200 text/html, which ofetch resolves as a
+      // string (`responseType: 'json'` does not change that), and a truthy string would render
+      // every anonymous visitor as signed in. `null` or an empty body is the handler's "signed
+      // out" and is not worth a warning.
+      if (isClaims(fetched)) {
+        user.value = fetched;
+      } else if (fetched != null) {
+        warnAnonymous(routes.profile, 'No user claims came back from', fetched);
       }
+    } catch (error) {
+      // Stay anonymous on failure; auth-dependent UI simply renders logged-out.
+      warnAnonymous(routes.profile, 'Could not fetch', error);
     }
   });
 });
