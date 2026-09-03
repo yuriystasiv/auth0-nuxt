@@ -8,16 +8,41 @@ const isClaims = (value: unknown): value is UserClaims =>
   typeof value === 'object' && value !== null && 'sub' in value && typeof value.sub === 'string';
 
 /**
+ * Names the shape of a non-claims response without echoing it: the body of an unmounted
+ * route is a whole HTML page, and whatever else answers there is not ours to log.
+ */
+const describeResponse = (value: unknown): string => {
+  if (typeof value === 'string') {
+    return value.trimStart().startsWith('<') ? 'an HTML document' : 'a string';
+  }
+  if (Array.isArray(value)) {
+    return 'an array';
+  }
+  if (typeof value === 'object') {
+    return 'an object without a string `sub`';
+  }
+  return `a ${typeof value}`;
+};
+
+/** Reduces a fetch failure to its status code or error name; the message can carry the body. */
+const describeError = (error: unknown): string => {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status === 'number') {
+    return `HTTP ${status}`;
+  }
+  return error instanceof Error ? error.name : 'an unknown error';
+};
+
+/**
  * Dev-only explanation for why `useUser()` stayed anonymous. The likely cause is the same in
  * every case: a `mountRoutes: false` app that never mounted the profile handler, which leaves
  * every opted-out route anonymous with no other signal.
  */
-const warnAnonymous = (profile: string, reason: string, detail: unknown) => {
+const warnAnonymous = (reason: string) => {
   if (import.meta.dev) {
     console.warn(
-      `[auth0] ${reason} \`${profile}\`, so \`useUser()\` stays anonymous. ` +
-        'If you set `mountRoutes: false`, mount the profile handler yourself.',
-      detail
+      `[auth0] ${reason}, so \`useUser()\` stays anonymous. ` +
+        'If you set `mountRoutes: false`, mount the profile handler yourself.'
     );
   }
 };
@@ -56,11 +81,11 @@ export default defineNuxtPlugin(async (nuxtApp) => {
       if (isClaims(fetched)) {
         user.value = fetched;
       } else if (fetched != null) {
-        warnAnonymous(routes.profile, 'No user claims came back from', fetched);
+        warnAnonymous(`\`${routes.profile}\` answered with ${describeResponse(fetched)} instead of user claims`);
       }
     } catch (error) {
       // Stay anonymous on failure; auth-dependent UI simply renders logged-out.
-      warnAnonymous(routes.profile, 'Could not fetch', error);
+      warnAnonymous(`Fetching \`${routes.profile}\` failed with ${describeError(error)}`);
     }
   });
 });

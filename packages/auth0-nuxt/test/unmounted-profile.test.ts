@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { setup, createPage, url } from '@nuxt/test-utils';
-import { fileURLToPath } from 'node:url';
 import type { Route } from 'playwright-core';
+import { rootDir, runtimeConfig, isProfile, hydratedUserState } from './unmounted-profile.shared';
 
 /**
  * Browser-level coverage for the client plugin when `mountRoutes: false` left `/auth/profile`
@@ -10,21 +10,7 @@ import type { Route } from 'playwright-core';
  * fetch with 200 HTML, and nothing may treat that as a signed-in user.
  */
 describe('client hydration with an unmounted profile route', async () => {
-  await setup({
-    rootDir: fileURLToPath(new URL('./fixtures/unmounted-profile', import.meta.url)),
-    browser: true,
-    nuxtConfig: {
-      runtimeConfig: {
-        auth0: {
-          domain: 'example.auth0.local',
-          clientId: 'test-client-id',
-          clientSecret: 'test-client-secret',
-          sessionSecret: 'a-sufficiently-long-session-secret-value-1234567890',
-          appBaseUrl: 'http://127.0.0.1:3003',
-        },
-      },
-    },
-  });
+  await setup({ rootDir, browser: true, nuxtConfig: { runtimeConfig } });
 
   /**
    * Loads a page and reports the profile response status and what `useUser()` ended up as.
@@ -37,15 +23,11 @@ describe('client hydration with an unmounted profile route', async () => {
       await page.route('**/auth/profile', answer);
     }
 
-    // The plugin fetches after suspense resolves, so wait for that round trip before reading
-    // the DOM, otherwise the SSR-rendered "anonymous" passes vacuously.
-    const profile = page.waitForResponse((response) => new URL(response.url()).pathname === '/auth/profile');
+    const profile = page.waitForResponse((response) => isProfile(response.url()));
     await page.goto(url('/anything'), { waitUntil: 'hydration' });
     const status = (await profile).status();
-    // One more macrotask so the plugin's assignment after the response has rendered.
-    await page.waitForTimeout(100);
+    const state = await hydratedUserState(page);
 
-    const state = await page.getByTestId('user-state').textContent();
     await page.close();
     return { status, state };
   }
