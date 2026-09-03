@@ -70,7 +70,7 @@ describe('Auth0 Nuxt Module', () => {
 
   it('should not register the client hydration plugin when hydrateUser is false', async () => {
     // Wiring only. That the browser then makes no profile request is covered against a real
-    // build in test/unmounted-profile.test.ts.
+    // build in test/unmounted-profile-opt-out.test.ts.
     // @ts-expect-error: module is a function
     await auth0Module.setup({ hydrateUser: false }, mockNuxt);
 
